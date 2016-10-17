@@ -1,0 +1,13 @@
+**/build/*
+*.bin
+*.bak
+*.Bak
+*.swp
+*.swo
+tags
+src/**/makefile
+inc/**/makefile
+lib/**/makefile
+keil/project_TDROID_ALPHA_SW.dep 
+keil/*.uvgui.*
+*.dep

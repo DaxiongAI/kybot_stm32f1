@@ -1,0 +1,91 @@
+#include "hmc5883.h"
+#include "i2c1_hw.h"
+#include "log.h"
+#include "file_id.h"
+
+#define this_file_id file_id_hmc5883
+
+// 3C = 1E << 1
+#define MAG_ADDRESS 0x1E
+// 数据排布: XH XL ZH ZL YH YL
+#define HMC5883_REG_MAG                 3
+#define HMC5883_REG_STATUS              9
+#define HMC5883_REG_STATUS_DRDY_MASK    0x01
+#define HMC5883_REG_SETTING             0
+
+uint8_t flag_mag_offset_ok = 1;
+int16_imu_t mag_offset;//零漂
+int16_imu_t mag_latest;
+
+void hmc5883_init(void)
+{
+	uint32_t success = 0;
+
+        // 检查ID。
+        /*uint8_t id[3];*/
+        /*success |= i2c_read(MAG_ADDRESS, 10, id, 3);*/
+        /*if(id[0] != 0x48 || id[1] != 0x34 || id[2] != 0x33)*/
+        const uint8_t param[][2] = {
+                // {寄存器地址,寄存器值},
+                {0x00, 0x78}, // RegA，滑动平均窗口：8，采样率：75Hz。
+                {0x01, 1<<6}, // RegB，量程：+-1.9Ga。
+                {0x02, 0x00}, // mode，连续测量模式。
+        };
+        for(int i = 0; i < sizeof(param)/2; i++) {
+                success |= i2c_write_byte(MAG_ADDRESS, param[i][0], param[i][1]);
+                uint8_t check = 0;
+                success |= i2c_read_byte(MAG_ADDRESS, param[i][0], &check);
+                if(check != param[i][1])
+                        success |= 1;
+        }
+	if(success)
+		log_error("mag read FAILED !");
+}
+
+void hmc5883_read(void)
+{
+        uint8_t read_buffer[6];//iic读取后存放数据
+        uint32_t success = 0;
+
+        success = i2c_read(MAG_ADDRESS, HMC5883_REG_MAG, 6, read_buffer);
+
+	if(success)
+                log_error("mag read FAILED !");
+
+        // YZ调换
+        mag_latest.x = ((((int16_t)read_buffer[0]) << 8) | read_buffer[1]) - mag_offset.x;
+        mag_latest.y = ((((int16_t)read_buffer[4]) << 8) | read_buffer[5]) - mag_offset.y;
+        mag_latest.z = ((((int16_t)read_buffer[2]) << 8) | read_buffer[3]) - mag_offset.z;
+
+        if(!flag_mag_offset_ok)//校正零偏
+        {
+                static int32_t temp_mag_x=0,temp_mag_y=0,temp_mag_z=0;
+                static int32_t filter_cnt=0;
+                if(filter_cnt==0)
+                {
+                        mag_offset.x = 0;
+                        mag_offset.y = 0;
+                        mag_offset.z = 0;
+                        temp_mag_x = 0;
+                        temp_mag_y = 0;
+                        temp_mag_z = 0;
+                        log_info("start calibrate the mag");
+                }
+                temp_mag_x += mag_latest.x;
+                temp_mag_y += mag_latest.y;
+                temp_mag_z += mag_latest.z;
+                filter_cnt++;
+                if(filter_cnt == MAX_FILTER_CNT)
+                {
+                        mag_offset.x = temp_mag_x/filter_cnt;
+                        mag_offset.y = temp_mag_y/filter_cnt;
+                        mag_offset.z = temp_mag_z/filter_cnt;
+                        log_info("mag calibration is done");
+                        log_debug("mag offset: x=%d y=%d z=%d", mag_offset.x, mag_offset.y, mag_offset.z);
+                        filter_cnt = 0;
+                        flag_mag_offset_ok = 1;
+                }
+                return;
+        }
+}
+

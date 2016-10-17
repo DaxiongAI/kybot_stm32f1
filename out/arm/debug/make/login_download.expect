@@ -1,0 +1,31 @@
+#!/usr/bin/expect 
+
+#set ip [lindex $argv 0];
+#set exec_path [lindex $argv 1];
+set exec_name [lindex $argv 0];
+#puts "$exec_name"
+
+set timeout 3
+#set ip $env(ARM_BOARD_IP)
+#set ip 10.0.1.100
+set prompt "*> "
+
+#This spawns the telnet program and connects it to the variable name
+log_user 0
+spawn telnet $ip 4444
+
+expect "*> "         
+send "reset\n"           
+
+expect "*> "         
+send "halt\n"           
+
+expect "$prompt"
+log_user 1
+send "$exec_name \r"
+
+expect "*> "         
+send "reset\n"           
+
+interact             
+

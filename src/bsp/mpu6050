@@ -1,0 +1,245 @@
+#include <stdlib.h>
+#include <math.h>
+#include "stm32f10x.h"
+#include "mpu6050.h"
+#include "i2c1_hw.h"
+#include "param.h"
+#include "delay.h"
+#include "workdata.h"
+#include "log.h"
+#include "file_id.h"
+#include "buzzer.h"
+#include "tim.h"
+
+#define this_file_id file_id_mpu6050
+#define RESTRICT_PITCH // Comment out to restrict roll to ±90deg instead - please read: http://www.freescale.com/files/sensors/doc/app_note/AN3461.pdf
+#define RAD_TO_DEG 180 / 3.1415926
+//定义器件在IIC总线中的从地址,根据ALT  ADDRESS地址引脚不同修改
+#define	IMU_ADDR   MPU6050_ADDRESS_AD0_LOW
+// deg/s，turtlebot的gyr精度是0.00875deg/s(+/-250度/s的量程)
+// 这里不用括号括起来，方便feedback.c文件中计算
+//#define TO_KUBOKI_GYR_UNIT              76294/87500
+#define LSB 		131
+#define TO_KOBUKI_GYR_UNIT              100000/(LSB*875)
+
+// static uint8_t flag_setup_ok = 0;
+
+uint8_t flag_acc_offset_ok = 1;
+int16_imu_t acc_offset;//零漂
+int16_imu_t acc_latest;
+
+float kalAngleX, kalAngleY, kalAngleZ;
+kalman_t kalman_x={
+        0.001f, 
+        0.003f, 
+        0.03f, 
+        0.0f, 
+        0.0f, 
+        0.0f,
+        {{0.0f,0.0f},{0.0f,0.0f}}
+};
+kalman_t kalman_y={
+        0.001f, 
+        0.003f, 
+        0.03f, 
+        0.0f, 
+        0.0f, 
+        0.0f,
+        {{0.0f,0.0f},{0.0f,0.0f}}
+};
+kalman_t kalman_z={
+        0.001f, 
+        0.003f, 
+        0.03f, 
+        0.0f, 
+        0.0f, 
+        0.0f,
+        {{0.0f,0.0f},{0.0f,0.0f}}
+};
+/*double gyroXangle, gyroYangle, gyroZangle; // Angle calculate using the gyro only*/
+// 数据读取频率必须和feedback ID_RAW_GYRO保持一致
+// read time: 427us
+void mpu6050_read(void)
+{
+        uint8_t read_buffer[6];					//iic读取后存放数据
+        uint32_t success = 0;
+
+        success = i2c_read(IMU_ADDR, MPU6050_RA_ACCEL_XOUT_H, 6, read_buffer);
+
+        /*success |= i2c_read_byte(IMU_ADDR, MPU6050_RA_GYRO_XOUT_H, &read_buffer[0]);*/
+        /*success |= i2c_read_byte(IMU_ADDR, MPU6050_RA_GYRO_XOUT_L, &read_buffer[1]);*/
+        /*success |= i2c_read_byte(IMU_ADDR, MPU6050_RA_GYRO_YOUT_H, &read_buffer[2]);*/
+        /*success |= i2c_read_byte(IMU_ADDR, MPU6050_RA_GYRO_YOUT_L, &read_buffer[3]);*/
+        /*success |= i2c_read_byte(IMU_ADDR, MPU6050_RA_GYRO_ZOUT_H, &read_buffer[4]);*/
+        /*success |= i2c_read_byte(IMU_ADDR, MPU6050_RA_GYRO_ZOUT_L, &read_buffer[5]);*/
+
+        if(success)
+                log_error("mpu6050 read FAILED !");
+
+        acc_latest.x = ((((int16_t)read_buffer[0]) << 8) | read_buffer[1]) - acc_offset.x;
+        acc_latest.y = ((((int16_t)read_buffer[2]) << 8) | read_buffer[3]) - acc_offset.y;
+        acc_latest.z = ((((int16_t)read_buffer[4]) << 8) | read_buffer[5]) - acc_offset.z;
+
+        if(!flag_acc_offset_ok)//校正零偏
+        {
+                static int32_t temp_acc_x=0,temp_acc_y=0,temp_acc_z=0;
+                static int32_t filter_cnt=0;
+                if(filter_cnt==0)
+                {
+                        acc_offset.x=0;
+                        acc_offset.y=0;
+                        acc_offset.z=0;
+                        temp_acc_x = 0;
+                        temp_acc_y = 0;
+                        temp_acc_z = 0;
+                        log_info("start calibrate the acc");
+                }
+                temp_acc_x += acc_latest.x;
+                temp_acc_y += acc_latest.y;
+                temp_acc_z += acc_latest.z;
+                filter_cnt++;
+                if(filter_cnt == MAX_FILTER_CNT)
+                {
+                        acc_offset.x = temp_acc_x / filter_cnt;
+                        acc_offset.y = temp_acc_y / filter_cnt;
+                        acc_offset.z = temp_acc_z / filter_cnt;
+                        log_info("acc calibration is done");
+                        log_debug("acc offset: x=%d y=%d z=%d", acc_offset.x, acc_offset.y, acc_offset.z);
+                        filter_cnt = 0;
+                        flag_acc_offset_ok = 1;
+                }
+                return;
+        }
+
+        return;
+#if 0
+#ifdef RESTRICT_PITCH // Eq. 25 and 26
+        double roll  = atan2(acc_latest.y, acc_latest.z) * RAD_TO_DEG;
+        double pitch = atan(-acc_latest.x / sqrt(acc_latest.y * acc_latest.y + acc_latest.z * acc_latest.z)) * RAD_TO_DEG;
+#else // Eq. 28 and 29
+        double roll  = atan(acc_latest.y / sqrt(acc_latest.x * acc_latest.x + acc_latest.z * acc_latest.z)) * RAD_TO_DEG;
+        double pitch = atan2(-acc_latest.x, acc_latest.z) * RAD_TO_DEG;
+#endif
+        double yaw = atan2(
+                        (sqrt(acc_latest.x * acc_latest.x + acc_latest.y * acc_latest.y + acc_latest.z * acc_latest.z) * cos(pitch) * (sin(roll)+cos(roll)) 
+                         - acc_latest.y-acc_latest.z),
+                        ((cos(roll)-sin(roll))*acc_latest.x)
+                        ) * RAD_TO_DEG;
+        if (!flag_setup_ok) {
+                kalman_x.angle = roll;
+                kalman_y.angle = pitch;
+                kalman_z.angle = yaw;
+                flag_setup_ok = 1;
+                return;
+        }		
+
+        double dt = 0.01;
+
+        double gyroXrate = gyr_latest.x / 131.0; // Convert to deg/s
+        double gyroYrate = gyr_latest.y / 131.0; // Convert to deg/s
+        double gyroZrate = gyr_latest.z / 131.0; // Convert to deg/s
+
+#ifdef RESTRICT_PITCH
+        // This fixes the transition problem when the accelerometer angle jumps between -180 and 180 degrees
+        if ((roll < -90 && kalAngleX > 90) || (roll > 90 && kalAngleX < -90)) {
+                kalman_x.angle = roll;
+                kalAngleX = roll;
+                /*gyroXangle = roll;*/
+        } else
+                kalAngleX = kalmanGetAngle(&kalman_x, roll, gyroXrate, dt); // Calculate the angle using a Kalman filter
+
+        if (abs(kalAngleX) > 90)
+                gyroYrate = -gyroYrate; // Invert rate, so it fits the restriced accelerometer reading
+        if (abs(kalAngleZ) > 90)
+                gyroZrate = -gyroZrate; // Invert rate, so it fits the restriced accelerometer reading
+
+        kalAngleY = kalmanGetAngle(&kalman_y, pitch, gyroYrate, dt);
+
+        kalAngleZ = kalmanGetAngle(&kalman_z, yaw, gyroZrate, dt);
+
+
+#else
+        // This fixes the transition problem when the accelerometer angle jumps between -180 and 180 degrees
+        if ((pitch < -90 && kalAngleY > 90) || (pitch > 90 && kalAngleY < -90)) {
+                kalman_y.angle = pitch;
+                kalAngleY = pitch;
+                gyroYangle = pitch;
+        } else
+                kalAngleY = kalmanGetAngle(&kalman_y, pitch, gyroYrate, dt); // Calculate the angle using a Kalman filter
+
+        if (abs(kalAngleY) > 90)
+                gyroXrate = -gyroXrate; // Invert rate, so it fits the restriced accelerometer reading
+
+        kalAngleX = kalmanGetAngle(&kalman_x, roll, gyroXrate, dt); // Calculate the angle using a Kalman filter
+#endif
+        static uint32_t debug_time = 0;
+        debug_time++;
+        if (debug_time == 100) {
+                debug_time = 0;
+                log_debug("roll=%f, pitch=%f, yaw=%f", kalAngleX, kalAngleY, kalAngleZ);
+        }
+#endif
+        /*gyroXangle += gyroXrate * dt; // Calculate gyro angle without any filter*/
+        /*gyroYangle += gyroYrate * dt;*/
+        //gyroXangle += kalmanX.getRate() * dt; // Calculate gyro angle using the unbiased rate
+        //gyroYangle += kalmanY.getRate() * dt;
+
+        // Reset the gyro angle when it has drifted too much
+        /*if (gyroXangle < -180 || gyroXangle > 180)*/
+        /*gyroXangle = kalAngleX;*/
+        /*if (gyroYangle < -180 || gyroYangle > 180)*/
+        /*gyroYangle = kalAngleY;*/
+
+        /*gyr_latest.x = (int64_t) gyr_latest.x * TO_KOBUKI_GYR_UNIT;*/
+        /*gyr_latest.y = (int64_t) gyr_latest.y * TO_KOBUKI_GYR_UNIT;*/
+        /*gyr_latest.z = (int64_t) gyr_latest.z * TO_KOBUKI_GYR_UNIT;*/
+}
+static uint8_t MPU6050_setClockSource(uint8_t source)
+{
+	return i2cWriteBits(IMU_ADDR, MPU6050_RA_PWR_MGMT_1, MPU6050_PWR1_CLKSEL_BIT, MPU6050_PWR1_CLKSEL_LENGTH, source);
+}
+static uint8_t MPU6050_setFullScaleGyroRange(uint8_t range) 
+{
+	return i2cWriteBits(IMU_ADDR, MPU6050_RA_GYRO_CONFIG, MPU6050_GCONFIG_FS_SEL_BIT, MPU6050_GCONFIG_FS_SEL_LENGTH, range);
+}
+static uint8_t MPU6050_setFullScaleAccelRange(uint8_t range)
+{
+	return i2cWriteBits(IMU_ADDR, MPU6050_RA_ACCEL_CONFIG, MPU6050_ACONFIG_AFS_SEL_BIT, MPU6050_ACONFIG_AFS_SEL_LENGTH, range);
+}
+static uint8_t MPU6050_setSleepEnabled(uint8_t enabled) 
+{
+	return i2cWriteBit(IMU_ADDR, MPU6050_RA_PWR_MGMT_1, MPU6050_PWR1_SLEEP_BIT, enabled);
+}
+static uint8_t MPU6050_setI2CMasterModeEnabled(uint8_t enabled) 
+{
+	return i2cWriteBit(IMU_ADDR, MPU6050_RA_USER_CTRL, MPU6050_USERCTRL_I2C_MST_EN_BIT, enabled);
+}
+static uint8_t MPU6050_setI2CBypassEnabled(uint8_t enabled) 
+{
+	return i2cWriteBit(IMU_ADDR, MPU6050_RA_INT_PIN_CFG, MPU6050_INTCFG_I2C_BYPASS_EN_BIT, enabled);
+}
+static uint8_t MPU6050_setDLPF(uint8_t mode)
+{
+	return i2cWriteBits(IMU_ADDR, MPU6050_RA_CONFIG, MPU6050_CFG_DLPF_CFG_BIT, MPU6050_CFG_DLPF_CFG_LENGTH, mode);
+}
+void mpu6050_init(void)
+{
+        uint32_t success = 0;
+        /*if(i2c_write_byte(IMU_ADDR,MPU6050_RA_PWR_MGMT_1, 0x00))*/
+        /*if(i2c_write_byte(IMU_ADDR,MPU6050_RA_SMPLRT_DIV, 0x07))*/
+        /*if(i2c_write_byte(IMU_ADDR,MPU6050_RA_CONFIG, 0x06))*/
+        /*if(i2c_write_byte(IMU_ADDR,MPU6050_RA_GYRO_CONFIG, MPU6050_GYRO_FS_250 << 3))*/
+        /*if(i2c_write_byte(IMU_ADDR,MPU6050_RA_ACCEL_CONFIG, MPU6050_ACCEL_FS_8 << 3))//acc +-8g*/
+        /*if(i2c_write_byte(IMU_ADDR,MPU6050_RA_USER_CTRL, 0 << 5))//acc +-8g*/
+
+	success |= MPU6050_setSleepEnabled(0); //进入工作状态
+	success |= MPU6050_setClockSource(MPU6050_CLOCK_PLL_XGYRO); //设置时钟  0x6b   0x01
+	success |= MPU6050_setFullScaleGyroRange(MPU6050_GYRO_FS_250);//陀螺仪最大量程 
+	success |= MPU6050_setFullScaleAccelRange(MPU6050_ACCEL_FS_8);	//加速度度最大量程
+	success |= MPU6050_setDLPF(MPU6050_DLPF_BW_42);
+	success |= MPU6050_setI2CMasterModeEnabled(0);	 //不让MPU6050 控制AUXI2C
+	success |= MPU6050_setI2CBypassEnabled(1);	 //主控制器的I2C与MPU6050的AUXI2C直通。控制器可以直接访问HMC5883L
+
+        if(success)
+                log_error("mpu6050 init FAILED !");
+}
