@@ -14,14 +14,14 @@
 #define LED1_BLUE_GPIO                  GPIOC
 #define LED1_BLUE_PIN                   GPIO_Pin_15
 
-#define LED2_RED_GPIO                   GPIOB
-#define LED2_RED_PIN                    GPIO_Pin_5
+#define LED2_RED_GPIO                   GPIOA
+#define LED2_RED_PIN                    GPIO_Pin_8
 
-#define LED2_GREEN_GPIO                 GPIOA
+#define LED2_GREEN_GPIO                 GPIOB
 #define LED2_GREEN_PIN                  GPIO_Pin_15
 
 #define LED2_BLUE_GPIO                  GPIOB
-#define LED2_BLUE_PIN                   GPIO_Pin_4
+#define LED2_BLUE_PIN                   GPIO_Pin_14
 
 enum led{
         led1  = 0x01,
