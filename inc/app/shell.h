@@ -5,7 +5,7 @@
 
 #define SHELL_HISTORY_LINES     20
 #define SHELL_CMD_SIZE          40
-#define SHELL_PROMPT            "[αTdroid@kydea ~$] "
+#define SHELL_PROMPT            "[kybot@kydea ~$] "
 
 enum input_stat {
 	WAIT_NORMAL,
