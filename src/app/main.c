@@ -312,11 +312,11 @@ void debug_task(void)
         if(log_flag & LOG_BATTERY){
                 log_flag &= ~LOG_BATTERY;
                 uint8_t voltage = get_battery_vol();
-                if(voltage <= TDROID_BAT_DANGEROUS){
+                if(voltage <= KYBOT_BAT_DANGEROUS){
                         log_error("battery is dangerous");
                         buzzer_toggle(200, 50);
                 }
-                else if(voltage <= TDROID_BAT_LOW) {
+                else if(voltage <= KYBOT_BAT_LOW) {
                         log_warn("battery is low");
                         buzzer_toggle(10, 50);
                 }

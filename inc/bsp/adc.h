@@ -7,11 +7,11 @@
 // kobuki 电池额定电压16.5V
 #define KOBUKI_BAT_CAPACITY 	165
 // 本机器的电池额定电压，对应kobuki的16.5V
-#define TDROID_BAT_CAPACITY	84
+#define KYBOT_BAT_CAPACITY	84
 // 低电压7.2V，对应kobuki的14.0V
-#define TDROID_BAT_LOW		72
+#define KYBOT_BAT_LOW		72
 // 危险电压6.8V，对应kobuki的13.2V
-#define TDROID_BAT_DANGEROUS	68
+#define KYBOT_BAT_DANGEROUS	68
 
 extern __IO u16 ADC_ConvertedValue;
 
