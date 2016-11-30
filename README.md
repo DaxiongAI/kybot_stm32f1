@@ -1,4 +1,4 @@
-Kybot交流群：488295654 
+Kybot交流群：488295654   
 目录结构：  
 bin：自动化脚本，makefile  
 cmake：Linux下cmake编译工程的文件  
